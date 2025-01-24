@@ -242,13 +242,20 @@ proc sanitizeName(state: var State, x: JsonNode): string {.compileTime.} =
 
 proc findAlias(kind: JsonNode): string =
   case kind["kind"].str:
-  of "alias": kind["value"].str
-  of "base", "special", "vector": ""
-  of "pointer", "atomic": findAlias(kind["base"])
-  of "array": (if kind["value"].kind == JNull: "" else: findAlias(kind["value"]))
-  of "struct", "union", "enum": (if kind.hasKey("name"): kind["name"].str else: "")
-  of "proc": (if kind.hasKey("name"): kind["name"].str else: "")
-  else: error("Unknown kind in findAlias: " & $kind)
+  of "alias": 
+    result = kind["value"].str
+  of "base", "special", "vector": 
+    result = ""
+  of "pointer", "atomic": 
+    result = findAlias(kind["base"])
+  of "array": 
+    result = if kind["value"].kind == JNull: "" else: findAlias(kind["value"])
+  of "struct", "union", "enum": 
+    result = if kind.hasKey("name"): kind["name"].str else: ""
+  of "proc": 
+    result = if kind.hasKey("name"): kind["name"].str else: ""
+  else: 
+    error("Unknown kind in findAlias: " & $kind)
 
 proc addUsings(used: var OrderedSet[string], node: JsonNode) =
   case node["kind"].str:
@@ -311,67 +318,97 @@ proc addOpaque(state: var State, opaque: string) =
     state.opaqueTypes.incl opaque
 
 proc toNimType(json: JsonNode, state: var State): NimNode =
-  result = case json["kind"].str:
-    of "base": json["value"].str.ident
-    of "pointer":
-      var node =
-        case json["base"]["kind"].str:
-        of "alias", "proc", "base":
-          var node = json["base"].toNimType(state)
-          if node.strCmp "void":
-            node = "pointer".ident
-          node
-        else:
-          "pointer".ident
-      for i in 0..<json["depth"].num - (if node.strCmp("pointer") or json["base"]["kind"].str == "proc": 1 else: 0):
-        node = nnkPtrTy.newTree(node)
-      node
-    of "proc":
-      var procTy = nnkProcTy.newTree(
-        nnkFormalParams.newTree(json["return"].toNimType(state)),
-        nnkPragma.newTree(json["callingConvention"].str.ident))
-      if json["variadic"].bval and (json["proto"].bval or preAnsiFuncDecl):
-        procTy[^1].add "varargs".ident
-      if json["return"]["kind"].str == "pointer" and json["return"]["base"]["kind"].str == "alias":
-        state.addOpaque json["return"]["base"]["value"].str
-      var
-        i = 0
-        usedFields: HashSet[string]
-      for arg in json["arguments"]:
-        let
-          aname = if arg.hasKey("name"): usedFields.sanitizeName(arg["name"].str, "arg", state.renameCallback) else: "a" & $i
-          atype = (if arg.hasKey("type"): arg["type"] else: arg).toNimType(state)
-        if arg.hasKey("type"):
-          if arg["type"]["kind"].str == "pointer" and arg["type"]["base"]["kind"].str == "alias":
-            state.addOpaque arg["type"]["base"]["value"].str
-        procTy[0].add nnkIdentDefs.newTree(aname.ident, atype, newEmptyNode())
-        inc i
-      procTy
-    of "array":
-      if json.hasKey("size"):
-        nnkBracketExpr.newTree("array".ident, json["size"].num.newLit, json["value"].toNimType(state))
+  case json["kind"].str:
+  of "base": 
+    result = ident(json["value"].str)
+    
+  of "pointer":
+    var node =
+      case json["base"]["kind"].str:
+      of "alias", "proc", "base":
+        var node = json["base"].toNimType(state)
+        if node.strCmp "void":
+          node = "pointer".ident
+        node
       else:
-        nnkPtrTy.newTree(nnkBracketExpr.newTree("UncheckedArray".ident, json["value"].toNimType(state)))
-    of "alias":
-      if not state.knownValues.contains json["value"].str:
-        state.addOpaque json["value"].str
-      state.typeNameMap[json["value"].str]
-    of "enum":
-      error "Unable to resolve nested enums from here"
-    of "struct", "union":
-      error "Unable to resolve nested struct/union from here"
-    of "vector":
-      nnkObjectTy.newTree(newEmptyNode(), newEmptyNode(), newEmptyNode())
-    of "special":
-      nnkTupleTy.newTree(
-        newIdentDefs("low".ident, "uint64".ident),
-        newIdentDefs("high".ident, (if json["value"].str == "uint128": "uint64" else: "int64").ident))
-    of "atomic":
-      state.imports.mgetOrPut(state.currentFile, initHashSet[string]()).incl "std/atomics"
-      nnkBracketExpr.newTree("Atomic".ident, json["base"].toNimType(state))
+        "pointer".ident
+    # Handle multiple pointer levels
+    for i in 0..<json["depth"].num - (if node.strCmp("pointer") or
+                                       json["base"]["kind"].str == "proc": 1 else: 0):
+      node = nnkPtrTy.newTree(node)
+    result = node
+    
+  of "proc":
+    var procTy = nnkProcTy.newTree(
+      nnkFormalParams.newTree(json["return"].toNimType(state)),
+      nnkPragma.newTree(json["callingConvention"].str.ident))
+    if json["variadic"].bval and (json["proto"].bval or preAnsiFuncDecl):
+      procTy[^1].add "varargs".ident
+    if json["return"]["kind"].str == "pointer" and 
+       json["return"]["base"]["kind"].str == "alias":
+      state.addOpaque json["return"]["base"]["value"].str
+    var
+      i = 0
+      usedFields: HashSet[string]
+    for arg in json["arguments"]:
+      let
+        aname = if arg.hasKey("name"): 
+          usedFields.sanitizeName(arg["name"].str, "arg", state.renameCallback) 
+        else: 
+          "a" & $i
+        atype = (if arg.hasKey("type"): arg["type"] else: arg).toNimType(state)
+      if arg.hasKey("type"):
+        if arg["type"]["kind"].str == "pointer" and 
+           arg["type"]["base"]["kind"].str == "alias":
+          state.addOpaque arg["type"]["base"]["value"].str
+      procTy[0].add nnkIdentDefs.newTree(aname.ident, atype, newEmptyNode())
+      inc i
+    result = procTy
+    
+  of "array":
+    if json.hasKey("size"):
+      result = nnkBracketExpr.newTree(
+        "array".ident, 
+        json["size"].num.newLit, 
+        json["value"].toNimType(state))
     else:
-      warning "Unknown: " & $json
-      "pointer".ident
+      result = nnkPtrTy.newTree(
+        nnkBracketExpr.newTree(
+          "UncheckedArray".ident, 
+          json["value"].toNimType(state)))
+          
+  of "alias":
+    if not state.knownValues.contains json["value"].str:
+      state.addOpaque json["value"].str
+    result = state.typeNameMap[json["value"].str]
+    
+  of "enum":
+    error "Unable to resolve nested enums from here"
+    
+  of "struct", "union":
+    error "Unable to resolve nested struct/union from here"
+    
+  of "vector":
+    result = nnkObjectTy.newTree(
+      newEmptyNode(), 
+      newEmptyNode(), 
+      newEmptyNode())
+      
+  of "special":
+    result = nnkTupleTy.newTree(
+      newIdentDefs("low".ident, "uint64".ident),
+      newIdentDefs("high".ident, 
+        (if json["value"].str == "uint128": "uint64" else: "int64").ident))
+        
+  of "atomic":
+    state.imports.mgetOrPut(state.currentFile, initHashSet[string]()).incl "std/atomics"
+    result = nnkBracketExpr.newTree(
+      "Atomic".ident, 
+      json["base"].toNimType(state))
+      
+  else:
+    warning "Unknown: " & $json
+    result = "pointer".ident
 
 proc createEnum(origName: string, node: JsonNode, state: var State, comment: string) =
   let
@@ -827,7 +864,7 @@ macro importcImpl*(defs, outputPath: static[string], compilerArguments, files, i
       include `futharkCache`
 
   # Check if we have an old Opir output and the user just specified different post-processing steps
-  let output =
+  let output: string =
     if fileExists(opirCache) and not opirRebuild:
       hint "Using cached Opir output: " & opirCache
       staticRead(opirCache)
@@ -841,16 +878,15 @@ macro importcImpl*(defs, outputPath: static[string], compilerArguments, files, i
         var err = "Opir exited with non-zero exit code $1." % $opirRes.exitCode
         if opirRes.output != "":
           err.add "\nOpir output: \n" & opirRes.output
-        # Seems like opir wasn't found (gorgeEx returns -1 exit code on OSError/IOError)
+        # Seems like opir wasn't found (gorgeEx returns -1 exit code on OSError/IOError) 
         if opirRes.output == "" and opirRes.exitCode == -1:
           err.add " Are you sure opir is in PATH?"
         error err
-      else:
+      block:  # Use a block with one return value
         let opirOutput = opirRes.output.strip(chars=Whitespace).splitLines
         for i in 0..<opirOutput.high:
           echo opirOutput[i]
-        opirOutput[^1]
-
+        opirOutput[^1]  
 
   hint "Parsing Opir output"
   # TODO: Clear out old cache files?
