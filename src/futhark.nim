@@ -697,10 +697,17 @@ macro importc*(imports: varargs[untyped]): untyped =
     of nnkCallKinds:
       case node[0].strVal.toLower:
       of "define":
+        let defName = case node[1].kind:
+          of nnkStrLit: node[1].strVal
+          of nnkIdent: node[1].strVal  # For identifiers 
+          else: node[1].repr  # Fallback for other kinds
+          
         if node.len == 3:
-          defs = nnkInfix.newTree("&".ident, defs, newLit("#define " & node[1].strVal & " " & node[2].repr & "\n"))
+          defs = nnkInfix.newTree("&".ident, defs, 
+            newLit("#define " & defName & " " & node[2].repr & "\n"))
         else:
-          defs = nnkInfix.newTree("&".ident, defs, newLit("#define " & node[1].strVal & "\n"))
+          defs = nnkInfix.newTree("&".ident, defs, 
+            newLit("#define " & defName & "\n"))
       of "undef":
         defs = nnkInfix.newTree("&".ident, defs, newLit("#undef " & node[1].strVal & "\n"))
       of "path":
@@ -1160,4 +1167,3 @@ macro importcImpl*(defs, outputPath: static[string], compilerArguments, files, i
     hint "Writing file " & file
     hostCreateDir(outputDir)
     writeFile(file.changeFileExt("nim"), fileContent.repr)
-
