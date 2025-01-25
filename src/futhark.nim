@@ -803,6 +803,20 @@ proc getCommonPrefix(strs: openArray[string]): string =
         break
   strs[0][0..lastSlash]
 
+proc handleCudaTypes(state: var State) =
+  # Pre-define CUDA launch attribute types to avoid conflicts
+  state.types["cudaLaunchAttributeID"] = quote do:
+    type cudaLaunchAttributeID* = distinct cint
+
+  state.types["cudaLaunchAttributeValue"] = quote do:
+    type cudaLaunchAttributeValue* = object {.union.}
+      placeholder: cint
+
+  state.types["cudaLaunchAttribute"] = quote do:
+    type cudaLaunchAttribute* = object
+      id: cudaLaunchAttributeID
+      value: cudaLaunchAttributeValue
+
 macro importcImpl*(defs, outputPath: static[string], compilerArguments, files, importDirs, ignores: static[openArray[string]], renames, retypes: static[openArray[FromTo]], renameCallback: static[RenameCallback], opirCallbacks: static[OpirCallbacks], forwards: static[openArray[Forward]]): untyped =
   ## Generate code from C header file. A string, `defs`, containing a header
   ## file with `#include` statements, preprocessor defines and rules, etc. to
